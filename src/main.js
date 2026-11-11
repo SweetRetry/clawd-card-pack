@@ -27,7 +27,8 @@ const perf = createPerf(renderer, () => {
 // Drawing-buffer resolution. Phones report a DPR of 3, and every pixel runs the foil and
 // clearcoat shaders, so this starts at 1.5 and steps down while frames run long.
 // It never steps back up: a phone that struggled once is likely to struggle again (it heats).
-const DPR_STEPS = [1.5, 1.25, 1].map((d) => Math.min(devicePixelRatio, d));
+// ?hq renders at the device's full DPR with no stepping down, for recording promo footage.
+const DPR_STEPS = /[?&]hq\b/.test(location.search) ? [devicePixelRatio] : [1.5, 1.25, 1].map((d) => Math.min(devicePixelRatio, d));
 let dprStep = 0;
 renderer.setPixelRatio(DPR_STEPS[0]);
 const governor = { slow: 0, frames: 0 };
@@ -559,8 +560,12 @@ let last = performance.now(), time = 0, cursor = '';
 // The loop stops while the page is hidden or the GL context is lost. `running` keeps a
 // second loop from starting when both resume.
 let running = false, paused = false;
+// ?record hands the clock to a capture script (scripts/promo.mjs): nothing moves until it
+// calls window.__tick(ms), and CSS animations and timers advance by the same virtual time.
+// Every frame can then be screenshotted at 4K without the scene running ahead.
+const manual = /[?&]record\b/.test(location.search);
 function run() {
-  if (running || paused || document.hidden) return;
+  if (manual || running || paused || document.hidden) return;
   running = true;
   last = performance.now(); // no catch-up frames after a pause
   requestAnimationFrame(frame);
@@ -699,7 +704,27 @@ function frame(now) {
   // blurred background would otherwise re-blur a changing full-screen layer every frame.
   if (dexPanel.hidden || showcase) renderer.render(scene, camera);
   perf.frame(now, state.phase, performance.now() - t0);
-  requestAnimationFrame(frame);
+  if (!manual) requestAnimationFrame(frame);
+}
+
+if (manual) {
+  let clock = 0, seq = 0;
+  const timers = new Map(); // id -> [due, fn]
+  window.setTimeout = (fn, ms = 0) => (timers.set(++seq, [clock + ms, fn]), seq);
+  window.clearTimeout = (id) => timers.delete(id);
+  const ages = new WeakMap(); // animation -> virtual ms it has run
+  window.__tick = (ms) => {
+    clock += ms;
+    for (const [id, [due, fn]] of timers) if (due <= clock) timers.delete(id), fn();
+    for (const a of document.getAnimations()) {
+      const age = (ages.get(a) ?? -ms) + ms; // a new animation starts at 0
+      ages.set(a, age);
+      a.pause();
+      a.currentTime = age;
+    }
+    frame(clock);
+  };
+  last = 0;
 }
 
 resize();
