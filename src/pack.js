@@ -209,6 +209,7 @@ export function createPack() {
   const pack = {
     group, crab,
     charge: 0, // 0..1 swell just before the burst
+    home: 0, // resting height; main.js raises it on phones
     reset(scene, label) {
       colorway = (colorway + 1) % COLORWAYS.length;
       frontMat.map = art(colorway, label);
@@ -224,7 +225,7 @@ export function createPack() {
       pack.setTear(0);
       group.rotation.set(0, 0, 0);
       group.visible = true;
-      y = 9;
+      y = pack.home + 9;
       vy = 0;
       scene.add(group);
     },
@@ -261,7 +262,7 @@ export function createPack() {
         group.rotation.z += 0.9 * dt;
         if (group.position.y < -12) group.visible = false;
       } else {
-        vy += ((0 - y) * 90 - vy * 13) * dt;
+        vy += ((pack.home - y) * 90 - vy * 13) * dt;
         y += vy * dt;
         const busy = tear > 0 && tear < 1 ? 1 : 0;
         group.position.y = y + Math.sin(t * 1.6) * 0.06;

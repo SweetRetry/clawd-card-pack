@@ -1,6 +1,7 @@
 // The crab. One blocky body, cheeks, eyes that track a gaze, and a costume per variant.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BODY_COLOR } from './parts.js';
 import { ZODIAC, ZODIAC_FIT } from './zodiac.js';
 import { SHENGXIAO, SHENGXIAO_FIT } from './shengxiao.js';
@@ -11,6 +12,7 @@ const damp = THREE.MathUtils.damp;
 
 const BODY = { w: 1.5, h: 0.95, d: 0.8 };
 const FACE = { w: 1.36, h: 0.85 };
+const LEGS = [-0.56, -0.3, 0.3, 0.56];
 const COSTUMES = { ...ZODIAC, ...SHENGXIAO, ...FESTIVAL };
 
 // Framing of each variant inside the card window: scale, the y of its visual centre, optional x shift.
@@ -30,9 +32,12 @@ function assets() {
   const faces = faceTextures();
   const decal = (map) => new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false, toneMapped: false });
   shared = {
-    body: box(BODY.w, BODY.h, BODY.d, 0.1),
+    // Body and the four legs never move apart, so they are one mesh: one draw call, not five.
+    trunk: mergeGeometries([
+      box(BODY.w, BODY.h, BODY.d, 0.1),
+      ...LEGS.map((x) => box(0.17, 0.32, 0.3, 0.05).translate(x, -0.58, 0)),
+    ]),
     arm: box(0.3, 0.3, 0.42, 0.07),
-    leg: box(0.17, 0.32, 0.3, 0.05),
     face: new THREE.PlaneGeometry(FACE.w, FACE.h),
     skin: tint(BODY_COLOR, { roughness: 0.4, clearcoat: 0.7, clearcoatRoughness: 0.2 }),
     cheeks: decal(faces.cheeks),
@@ -156,13 +161,12 @@ export function createCrab(variant = 'classic') {
     return g;
   };
 
-  add(rig, A.body, A.skin);
+  add(rig, A.trunk, A.skin);
   const arms = [-1, 1].map((s) => {
     const pivot = sub(s * 0.72, -0.08, 0);
     add(pivot, A.arm, A.skin, s * 0.14);
     return pivot;
   });
-  for (const x of [-0.56, -0.3, 0.3, 0.56]) add(rig, A.leg, A.skin, x, -0.58, 0);
 
   // Cheeks stay put. The eyes are a separate decal so they can slide toward the gaze.
   const front = BODY.d / 2;

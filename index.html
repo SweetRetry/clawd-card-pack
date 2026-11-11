@@ -52,12 +52,19 @@
         }
       }
 
-      /* Bottom slot: one of hint, again, or the inspect bar, chosen by phase. */
+      /* Bottom slot: one of the idle, row or inspect bar, chosen by phase. All controls live
+         here because the top edge belongs to the host's back / share / more buttons.
+         --safe-bottom and --host-top are measured in compat.js. */
       .dock {
         position: fixed;
         left: 50%;
         bottom: 7vh;
+        bottom: calc(5vh + var(--safe-bottom, 0px));
         display: flex;
+        align-items: center;
+        /* left: 50% would otherwise cap the shrink-to-fit width at half the screen. */
+        width: -webkit-max-content;
+        width: max-content;
         transform: translate(-50%, 8px);
         opacity: 0;
         pointer-events: none;
@@ -73,28 +80,43 @@
       .supports-flex-gap .dock {
         column-gap: 10px;
       }
+      #idle-bar {
+        flex-direction: column;
+      }
+      #idle-bar > * + * {
+        margin-left: 0;
+        margin-top: 14px;
+      }
+      .supports-flex-gap #idle-bar > * + * {
+        margin-top: 0;
+      }
+      .supports-flex-gap #idle-bar {
+        row-gap: 14px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+      }
+      .controls > * + * {
+        margin-left: 8px;
+      }
       #hint {
         color: var(--soft);
         font-size: 13px;
         letter-spacing: 0.08em;
         white-space: nowrap;
       }
-      body[data-phase='idle'] #hint,
+      /* 'enter' keeps the idle bar up, so switching series does not make it blink. */
+      body[data-phase='enter'] #idle-bar,
+      body[data-phase='idle'] #idle-bar,
       body[data-phase='row'] #row-bar,
       body[data-phase='inspect'] #inspect-bar {
         opacity: 1;
         transform: translate(-50%, 0);
-      }
-      body[data-phase='row'] #row-bar,
-      body[data-phase='inspect'] #inspect-bar {
         pointer-events: auto;
       }
 
       #series {
-        position: fixed;
-        top: 24px;
-        left: 50%;
-        transform: translateX(-50%);
         display: flex;
         padding: 3px;
         border-radius: 999px;
@@ -110,7 +132,7 @@
         column-gap: 2px;
       }
       #series button {
-        padding: 6px 16px;
+        padding: 7px 14px;
         border: 0;
         border-radius: 999px;
         background: none;
@@ -123,14 +145,12 @@
         color: var(--ink);
         box-shadow: 0 1px 4px rgba(40, 30, 20, 0.12);
       }
-      #dex-open {
-        position: fixed;
-        top: 22px;
-        right: 24px;
-        padding: 8px 16px;
+      .dex-open {
+        padding: 8px 14px;
         font-size: 13px;
+        white-space: nowrap;
       }
-      #dex-count {
+      .dex-count {
         margin-left: 6px;
         color: var(--soft);
         font-variant-numeric: tabular-nums;
@@ -139,6 +159,7 @@
         position: fixed;
         z-index: 10;
         top: 72px;
+        top: calc(var(--host-top, 12px) + 12px);
         left: 50%;
         padding: 7px 16px;
         border-radius: 999px;
@@ -183,6 +204,7 @@
         display: flex;
         align-items: center;
         padding: 20px 24px;
+        padding-top: calc(var(--host-top, 12px) + 8px);
         background: linear-gradient(rgba(240, 239, 234, 1) 60%, rgba(240, 239, 234, 0));
       }
       #dex header > * + * {
@@ -211,6 +233,7 @@
         max-width: 960px;
         margin: 0 auto;
         padding: 0 24px 60px;
+        padding-bottom: calc(60px + var(--safe-bottom, 0px));
       }
       #dex section {
         margin-bottom: 36px;
@@ -360,45 +383,25 @@
         }
       }
 
-      /* Phones: the series tabs move left so they clear the dex button. Each env() line
-         follows a plain fallback for kernels that do not know env(). */
-      @media (max-width: 600px) {
-        #series {
-          top: 14px;
-          top: calc(14px + env(safe-area-inset-top));
-          left: 14px;
-          transform: none;
-        }
-        #series button {
-          padding: 6px 13px;
-        }
-        #dex-open {
-          top: 13px;
-          top: calc(13px + env(safe-area-inset-top));
-          right: 14px;
-          padding: 7px 13px;
-        }
-        #toast {
-          top: 60px;
-          top: calc(60px + env(safe-area-inset-top));
-        }
-        .dock {
-          bottom: 5vh;
-          bottom: calc(5vh + env(safe-area-inset-bottom));
-        }
-      }
     </style>
   </head>
   <body>
     <canvas id="stage"></canvas>
     <div id="flash"></div>
     <div id="scrim"></div>
-    <div id="series"></div>
-    <button id="dex-open" class="pill">图鉴<span id="dex-count"></span></button>
     <div id="toast"></div>
 
-    <div id="hint" class="dock">按住卡包，向右拖动撕开</div>
-    <div id="row-bar" class="dock"><button id="again" class="pill">再开一包</button></div>
+    <div id="idle-bar" class="dock">
+      <div id="hint">按住卡包，向右拖动撕开</div>
+      <div class="controls">
+        <div id="series"></div>
+        <button class="pill dex-open">图鉴<span class="dex-count"></span></button>
+      </div>
+    </div>
+    <div id="row-bar" class="dock">
+      <button id="again" class="pill">再开一包</button>
+      <button class="pill dex-open">图鉴<span class="dex-count"></span></button>
+    </div>
     <div id="inspect-bar" class="dock">
       <button id="save" class="pill">保存图片</button>
       <button id="back" class="pill">返回</button>

@@ -8,6 +8,7 @@ import { createPack, PACK } from './pack.js';
 import { createRays, createConfetti } from './fx.js';
 import { dex, loadDex, renderDex } from './dex.js';
 import { initCompat } from './compat.js';
+import { createPerf } from './perf.js';
 
 // Runs before any rendering so the capability classes are on <html> for the first paint.
 initCompat();
@@ -16,7 +17,33 @@ const $ = (sel) => document.querySelector(sel);
 const clamp = THREE.MathUtils.clamp, damp = THREE.MathUtils.damp;
 const canvas = $('#stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const perf = createPerf(renderer, () => {
+  // Perf HUD tap: alternate 1.5 and 1, to tell a GPU-bound phone from a CPU-bound one.
+  dprManual = true;
+  renderer.setPixelRatio(renderer.getPixelRatio() > 1 ? 1 : Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(innerWidth, innerHeight, false);
+});
+
+// Drawing-buffer resolution. Phones report a DPR of 3, and every pixel runs the foil and
+// clearcoat shaders, so this starts at 1.5 and steps down while frames run long.
+// It never steps back up: a phone that struggled once is likely to struggle again (it heats).
+const DPR_STEPS = [1.5, 1.25, 1].map((d) => Math.min(devicePixelRatio, d));
+let dprStep = 0;
+renderer.setPixelRatio(DPR_STEPS[0]);
+const governor = { slow: 0, frames: 0 };
+let dprManual = false; // set by the perf HUD while comparing resolutions by hand
+function govern(dt) {
+  if (dprManual || dprStep === DPR_STEPS.length - 1) return;
+  governor.frames++;
+  if (dt > 1 / 40) governor.slow++; // under 40 fps
+  if (governor.frames < 90) return;
+  if (governor.slow > 45) {
+    dprStep++;
+    renderer.setPixelRatio(DPR_STEPS[dprStep]);
+    renderer.setSize(innerWidth, innerHeight, false);
+  }
+  governor.slow = governor.frames = 0;
+}
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(28, 1, 0.5, 100);
 const TAN = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
@@ -40,26 +67,54 @@ const query = new URLSearchParams(location.search);
 const forced = query.get('cards')?.split(',');
 const ALL = SERIES.flatMap((s) => s.defs);
 const WEIGHT = { common: 6, rare: 3, ultra: 1 };
+// Built cards, least recently used first. Each holds a 1024px label texture of about 8 MB
+// with mipmaps, so only the last KEEP are kept: all 30 would hold some 240 MB of GPU memory.
 const built = new Map();
+const KEEP = 10;
+// The next hand, drawn early and built one card per frame while the row rests, so that
+// "again" does not stall for ~100 ms building five cards in one frame.
+let next = null; // { series, defs, i }
 let series = SERIES.find((s) => s.id === query.get('series')) ?? SERIES[0];
 let cards = [];
 let inspected = null;
 
 function cardFor(def) {
-  if (!built.has(def)) {
-    const made = createCard(def);
+  let made = built.get(def);
+  if (made) {
+    built.delete(def); // re-inserted below, as the most recent
+  } else {
+    made = createCard(def);
     scene.add(made.group, made.shadow);
     made.setVisible(false);
-    built.set(def, made);
+    // Upload its label and compile its shaders now, not on the first frame it is drawn.
+    renderer.initTexture(made.front.material.uniforms.uText.value);
+    renderer.compileAsync(made.group, camera, scene).catch(() => {});
   }
-  return built.get(def);
+  built.set(def, made);
+  return made;
+}
+function evict(inUse) {
+  for (const [def, c] of built) {
+    if (built.size <= KEEP) break;
+    if (inUse.has(c)) continue;
+    scene.remove(c.group, c.shadow);
+    c.dispose();
+    built.delete(def);
+  }
+}
+// Weighted draw without replacement: rarer cards get smaller keys on average.
+function draw() {
+  if (forced) return forced.map((v) => ALL.find((d) => d.variant === v)).filter(Boolean);
+  return series.defs.map((def) => [Math.random() ** (1 / WEIGHT[def.rarity]), def]).sort((a, b) => b[0] - a[0]).slice(0, 5).map(([, def]) => def);
+}
+function prebuild() {
+  if (!next || next.series !== series) next = { series, defs: draw(), i: 0 };
+  if (next.i < next.defs.length) cardFor(next.defs[next.i++]);
 }
 function deal() {
   for (const c of cards) c.setVisible(false);
-  // Weighted draw without replacement: rarer cards get smaller keys on average.
-  const defs = forced
-    ? forced.map((v) => ALL.find((d) => d.variant === v)).filter(Boolean)
-    : series.defs.map((def) => [Math.random() ** (1 / WEIGHT[def.rarity]), def]).sort((a, b) => b[0] - a[0]).slice(0, 5).map(([, def]) => def);
+  const defs = next && next.series === series ? next.defs : draw();
+  next = null;
   cards = defs.map((def, slot) => {
     const c = cardFor(def);
     c.slot = slot;
@@ -68,6 +123,7 @@ function deal() {
     return c;
   });
   pack.setPeek(defs.map((def) => def.colA));
+  evict(new Set(cards));
 }
 
 const pack = createPack();
@@ -88,8 +144,7 @@ const packShadow = new THREE.Mesh(
   new THREE.PlaneGeometry(3.3, 0.6),
   new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(blob), transparent: true, depthWrite: false, toneMapped: false, opacity: 0 })
 );
-packShadow.position.set(0, (-PACK.H * PACK.SCALE) / 2 - 0.55, 0);
-scene.add(packShadow);
+scene.add(packShadow); // resize() places it under the pack
 
 // Hides the row while one card is inspected. It writes depth so decals on the cards behind it are culled too.
 const INSPECT_Z = 5;
@@ -126,6 +181,12 @@ function resize() {
   const [needW, needH] = portrait ? [5.3, 11.6] : [14.6, 6.6];
   camera.position.z = Math.max(needH / 2 / TAN, needW / 2 / (TAN * camera.aspect));
   camera.updateProjectionMatrix();
+  // On phones the pack rests about 12% of the screen above centre. The note page and the
+  // profile grid show the top of this first screen as the cover, cropped at the bottom with
+  // a "use tool" button laid over it, so a centred pack loses its lower half and its face.
+  // The lower part of the screen is left for the controls.
+  pack.home = portrait ? 0.12 * 2 * camera.position.z * TAN : 0;
+  packShadow.position.y = pack.home - (PACK.H * PACK.SCALE) / 2 - 0.55;
   if (state.phase === 'row' || state.phase === 'inspect') for (const c of cards) c.base.set(c === inspected ? inspectPose() : slotPose(c.slot));
   if (showcase && !showcase.leaving) showcase.card.base.set(inspectPose());
 }
@@ -262,7 +323,7 @@ const origin = new THREE.Vector3();
 const tear = { p: 0, target: 0, held: false, startX: 0 };
 
 function newPack() {
-  deal();
+  perf.mark('deal', deal);
   pack.reset(scene, series.pack);
   setPhase('enter');
 }
@@ -275,11 +336,12 @@ function burst() {
   pack.openingWorld(origin);
   let fresh = 0;
   for (const c of cards) {
-    if (dex.collect(c.def, () => thumbnail(c))) fresh++;
+    if (dex.collect(c.def)) fresh++;
     c.rowed = c.launched = false;
   }
   refreshDexCount();
   if (fresh) toast(`新卡 +${fresh}`);
+  buzz();
   confetti.burst(origin);
   rays.launch();
   pack.release(scene);
@@ -289,6 +351,15 @@ function burst() {
   void glare.offsetWidth; // restart the animation
   glare.classList.add('go');
   setPhase('burst');
+}
+// A thump in the hand as the pack bursts. Container client 9.50+; silently absent elsewhere.
+function buzz() {
+  const miniTool = window.xhs && window.xhs.miniTool;
+  if (!miniTool || typeof miniTool.vibrateShort !== 'function') return;
+  try {
+    const done = miniTool.vibrateShort({ type: 'medium' });
+    if (done && done.catch) done.catch(() => {});
+  } catch (error) {}
 }
 // Cards leave the mouth one after another and spin up into the fan.
 function launch(c) {
@@ -443,11 +514,17 @@ for (const s of SERIES) {
 }
 
 const dexPanel = $('#dex');
-const refreshDexCount = () => ($('#dex-count').textContent = `${dex.count(ALL)} / ${ALL.length}`);
-$('#dex-open').addEventListener('click', () => {
-  renderDex($('#dex-body'), SERIES);
-  dexPanel.hidden = false;
-});
+const refreshDexCount = () => {
+  for (const el of document.querySelectorAll('.dex-count')) el.textContent = `${dex.count(ALL)} / ${ALL.length}`;
+};
+for (const el of document.querySelectorAll('.dex-open')) {
+  el.addEventListener('click', () => {
+    // Thumbnails of newly pulled cards are rendered here, while the table is covered.
+    dex.fillThumbs(ALL, (def) => perf.mark('thumb', () => thumbnail(cardFor(def))));
+    renderDex($('#dex-body'), SERIES);
+    dexPanel.hidden = false;
+  });
+}
 $('#dex-body').addEventListener('click', (e) => {
   const tile = e.target.closest('figure[data-id]');
   if (tile) openShowcase(ALL.find((def) => def.id === tile.dataset.id));
@@ -477,10 +554,36 @@ function watch(c, dt) {
 
 // ---- frame ----
 const HOVER_LIFT = 0.9;
-let last = performance.now(), time = 0;
+let last = performance.now(), time = 0, cursor = '';
+
+// The loop stops while the page is hidden or the GL context is lost. `running` keeps a
+// second loop from starting when both resume.
+let running = false, paused = false;
+function run() {
+  if (running || paused || document.hidden) return;
+  running = true;
+  last = performance.now(); // no catch-up frames after a pause
+  requestAnimationFrame(frame);
+}
+document.addEventListener('visibilitychange', run);
+canvas.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault(); // lets the browser restore it
+  paused = true;
+  toast('画面暂停，稍后自动恢复');
+});
+canvas.addEventListener('webglcontextrestored', () => {
+  paused = false;
+  run();
+});
 
 function frame(now) {
+  if (paused || document.hidden) {
+    running = false;
+    return;
+  }
+  const t0 = performance.now();
   const dt = Math.min((now - last) / 1000, 1 / 30);
+  govern((now - last) / 1000);
   last = now;
   time += dt;
   state.t += dt;
@@ -510,7 +613,7 @@ function frame(now) {
     case 'charge':
       // A beat of swelling before the pack gives way.
       pack.charge = Math.min(state.t / CHARGE, 1);
-      if (state.t >= CHARGE) burst();
+      if (state.t >= CHARGE) perf.mark('burst', burst);
       break;
     case 'burst':
       for (const c of cards) {
@@ -524,6 +627,7 @@ function frame(now) {
       break;
     case 'row':
       if (live) hovered = cardUnderPointer(hovered);
+      if (state.t > 1.2) prebuild();
       break;
     case 'exit':
       if (state.t > 0.6) {
@@ -588,9 +692,13 @@ function frame(now) {
 
   rays.update(time, dt);
   confetti.update(dt);
-  canvas.style.cursor = showcase ? 'pointer' : tear.held ? 'grabbing' : packHover ? 'grab' : hovered || inspected ? 'pointer' : 'default';
+  const want = showcase ? 'pointer' : tear.held ? 'grabbing' : packHover ? 'grab' : hovered || inspected ? 'pointer' : 'default';
+  if (want !== cursor) canvas.style.cursor = cursor = want; // a style write every frame can cost a style pass
   camera.layers.set(showcase ? SOLO : 0);
-  renderer.render(scene, camera);
+  // While the dex covers the table, the canvas under it is not redrawn. The dex's 94% opaque,
+  // blurred background would otherwise re-blur a changing full-screen layer every frame.
+  if (dexPanel.hidden || showcase) renderer.render(scene, camera);
+  perf.frame(now, state.phase, performance.now() - t0);
   requestAnimationFrame(frame);
 }
 
@@ -598,7 +706,7 @@ resize();
 loadDex().then(() => {
   refreshDexCount();
   newPack();
-  requestAnimationFrame(frame);
+  run();
   const sheet = query.get('sheet');
   if (sheet) exportSheet(sheet === 'all' ? ALL : SERIES.find((s) => s.id === sheet).defs, sheet);
 });

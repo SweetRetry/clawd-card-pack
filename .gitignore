@@ -2,3 +2,5 @@ node_modules/
 dist/
 tool.zip
 .DS_Store
+.redapp-tools/
+.vercel

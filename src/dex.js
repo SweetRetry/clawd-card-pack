@@ -101,13 +101,20 @@ function save() {
 }
 
 export const dex = {
-  // Records one pull. `thumb` is only called for a card not seen before. Returns true when new.
-  collect(def, thumb) {
+  // Records one pull. Returns true when the card is new. The thumbnail is filled in later,
+  // when the dex opens: rendering it here froze the burst for about half a second.
+  collect(def) {
     const fresh = !(def.id in owned);
-    if (fresh) owned[def.id] = { n: 0, thumb: thumb() };
+    if (fresh) owned[def.id] = { n: 0, thumb: null };
     owned[def.id].n++;
     save();
     return fresh;
+  },
+  // Gives every owned card in `defs` that has no thumbnail one from `make(def)`, saving once.
+  fillThumbs(defs, make) {
+    const missing = defs.filter((def) => def.id in owned && !owned[def.id].thumb);
+    for (const def of missing) owned[def.id].thumb = make(def);
+    if (missing.length) save();
   },
   count: (defs) => defs.filter((def) => def.id in owned).length,
   clear() {
@@ -122,7 +129,7 @@ export function renderDex(root, SERIES) {
   const tile = (def) => {
     const got = owned[def.id];
     return got
-      ? `<figure class="got ${def.rarity}" data-id="${def.id}"><span class="frame"><img src="${got.thumb}" alt="${def.name}"></span><figcaption><b>${def.name}</b><span>${RARITY[def.rarity]} · ×${got.n}</span></figcaption></figure>`
+      ? `<figure class="got ${def.rarity}" data-id="${def.id}"><span class="frame">${got.thumb ? `<img src="${got.thumb}" alt="${def.name}">` : ''}</span><figcaption><b>${def.name}</b><span>${RARITY[def.rarity]} · ×${got.n}</span></figcaption></figure>`
       : `<figure class="miss"><span class="frame"><div>?</div></span><figcaption><b>No. ${def.no}</b><span>${RARITY[def.rarity]}</span></figcaption></figure>`;
   };
   root.innerHTML = SERIES.map((s) => {

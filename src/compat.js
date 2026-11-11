@@ -26,6 +26,54 @@ function trackAppHeight() {
   window.addEventListener('orientationchange', sync);
 }
 
+// Publishes two lengths on <html> for the stylesheet, in plain px so Chrome 61 never sees env():
+//   --safe-bottom  the bottom safe-area inset
+//   --host-top     where the page's own UI may start below the host's top buttons
+// The PC simulator injects --safe-area-inset-* variables; phones answer env(). In the
+// container, getWindowInfo (client 9.49+) reports the host buttons' real rects. Older
+// clients do not, so there we keep a 52px nav row free below the safe area.
+function trackInsets() {
+  const root = document.documentElement;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+  document.body.appendChild(probe);
+  const inset = (side) => {
+    const injected = parseFloat(getComputedStyle(root).getPropertyValue(`--safe-area-inset-${side}`));
+    if (!isNaN(injected)) return injected;
+    probe.style.paddingTop = '0px';
+    probe.style.paddingTop = `env(safe-area-inset-${side})`; // ignored where env() is unknown
+    return parseFloat(getComputedStyle(probe).paddingTop) || 0;
+  };
+  const miniTool = window.xhs && window.xhs.miniTool;
+  let hostBottom = null; // lowest edge of the host's visible top buttons, from getWindowInfo
+
+  const sync = () => {
+    const top = inset('top');
+    const fallback = miniTool ? top + 52 : top + 12;
+    root.style.setProperty('--host-top', `${Math.round(hostBottom === null ? fallback : Math.max(hostBottom, top) + 8)}px`);
+    root.style.setProperty('--safe-bottom', `${Math.round(inset('bottom'))}px`);
+  };
+  const ask = () => {
+    if (!miniTool || typeof miniTool.getWindowInfo !== 'function') return;
+    Promise.resolve(miniTool.getWindowInfo())
+      .then((info) => {
+        const buttons = (info && info.menuButtons) || {};
+        hostBottom = ['back', 'me', 'share']
+          .map((name) => buttons[name])
+          .filter(Boolean)
+          .reduce((low, rect) => Math.max(low, rect.bottom), (info && info.statusBarHeight) || 0);
+        sync();
+      })
+      .catch(() => {});
+  };
+  sync();
+  ask();
+  window.addEventListener('resize', () => {
+    sync();
+    ask();
+  });
+}
+
 // CanvasRenderingContext2D.roundRect only arrived in Chrome 99. Card text, faces and
 // shadows all draw with it, so older kernels get this stand-in.
 function polyfillRoundRect() {
@@ -45,5 +93,6 @@ function polyfillRoundRect() {
 export function initCompat() {
   detectFlexGap();
   trackAppHeight();
+  trackInsets();
   polyfillRoundRect();
 }
