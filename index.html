@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Clawd 闪卡包</title>
+    <style>
+      :root {
+        --ink: #2a2622;
+        --soft: rgba(40, 30, 20, 0.5);
+        --line: rgba(40, 30, 20, 0.12);
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: radial-gradient(120% 90% at 50% 40%, #f5f4ef 0%, #e9e8e2 70%, #dfded7 100%);
+        color: var(--ink);
+        font-family: 'Inter', system-ui, -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+      }
+      #stage {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      .pill {
+        padding: 10px 20px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 6px 18px rgba(40, 30, 20, 0.08);
+      }
+      @media (hover: hover) {
+        .pill:hover {
+          background: #faf7f2;
+        }
+      }
+
+      /* Bottom slot: one of hint, again, or the inspect bar, chosen by phase. */
+      .dock {
+        position: fixed;
+        left: 50%;
+        bottom: 7vh;
+        display: flex;
+        transform: translate(-50%, 8px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.35s ease, transform 0.35s ease;
+      }
+      /* Flex gap baseline: margins on non-first children; the enhancement clears them. */
+      .dock > * + * {
+        margin-left: 10px;
+      }
+      .supports-flex-gap .dock > * + * {
+        margin-left: 0;
+      }
+      .supports-flex-gap .dock {
+        column-gap: 10px;
+      }
+      #hint {
+        color: var(--soft);
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        white-space: nowrap;
+      }
+      body[data-phase='idle'] #hint,
+      body[data-phase='row'] #row-bar,
+      body[data-phase='inspect'] #inspect-bar {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+      body[data-phase='row'] #row-bar,
+      body[data-phase='inspect'] #inspect-bar {
+        pointer-events: auto;
+      }
+
+      #series {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        padding: 3px;
+        border-radius: 999px;
+        background: rgba(40, 30, 20, 0.07);
+      }
+      #series button + button {
+        margin-left: 2px;
+      }
+      .supports-flex-gap #series button + button {
+        margin-left: 0;
+      }
+      .supports-flex-gap #series {
+        column-gap: 2px;
+      }
+      #series button {
+        padding: 6px 16px;
+        border: 0;
+        border-radius: 999px;
+        background: none;
+        color: rgba(40, 30, 20, 0.55);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      #series button[aria-pressed='true'] {
+        background: #fff;
+        color: var(--ink);
+        box-shadow: 0 1px 4px rgba(40, 30, 20, 0.12);
+      }
+      #dex-open {
+        position: fixed;
+        top: 22px;
+        right: 24px;
+        padding: 8px 16px;
+        font-size: 13px;
+      }
+      #dex-count {
+        margin-left: 6px;
+        color: var(--soft);
+        font-variant-numeric: tabular-nums;
+      }
+      #toast {
+        position: fixed;
+        z-index: 10;
+        top: 72px;
+        left: 50%;
+        padding: 7px 16px;
+        border-radius: 999px;
+        background: var(--ink);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        transform: translate(-50%, -8px);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease, transform 0.3s ease;
+      }
+      #toast.on {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      #dex {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        overflow-y: auto;
+        background: rgba(240, 239, 234, 0.97);
+        -webkit-overflow-scrolling: touch;
+      }
+      /* The blur is an enhancement; the flat background above is the Chrome 61 baseline. */
+      @supports ((-webkit-backdrop-filter: blur(14px)) or (backdrop-filter: blur(14px))) {
+        #dex {
+          background: rgba(240, 239, 234, 0.94);
+          -webkit-backdrop-filter: blur(14px);
+          backdrop-filter: blur(14px);
+        }
+      }
+      #dex[hidden] {
+        display: none;
+      }
+      #dex header {
+        position: sticky;
+        top: 0;
+        display: flex;
+        align-items: center;
+        padding: 20px 24px;
+        background: linear-gradient(rgba(240, 239, 234, 1) 60%, rgba(240, 239, 234, 0));
+      }
+      #dex header > * + * {
+        margin-left: 12px;
+      }
+      .supports-flex-gap #dex header > * + * {
+        margin-left: 0;
+      }
+      .supports-flex-gap #dex header {
+        column-gap: 12px;
+      }
+      #dex header h2 {
+        margin: 0 auto 0 0;
+        font-size: 20px;
+      }
+      #dex header button {
+        padding: 8px 16px;
+        font-size: 13px;
+      }
+      #dex-clear {
+        border: 0;
+        background: none;
+        color: var(--soft);
+      }
+      #dex-body {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 0 24px 60px;
+      }
+      #dex section {
+        margin-bottom: 36px;
+      }
+      #dex h3 {
+        display: flex;
+        justify-content: space-between;
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+      #dex h3 small {
+        color: var(--soft);
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      #dex .bar {
+        height: 4px;
+        margin-bottom: 16px;
+        border-radius: 2px;
+        background: var(--line);
+        overflow: hidden;
+      }
+      #dex .bar i {
+        display: block;
+        height: 100%;
+        border-radius: 2px;
+        background: #d9572b;
+      }
+      #dex .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+        grid-gap: 16px 12px;
+      }
+      #dex .grid > * {
+        min-width: 0;
+      }
+      #dex figure {
+        margin: 0;
+        text-align: center;
+      }
+      /* Baseline ratio box for Chrome 61: the frame holds the ratio, the media fills it. */
+      #dex figure .frame {
+        display: block;
+        position: relative;
+        width: 100%;
+        height: 0;
+        padding-top: 138.8889%;
+      }
+      @supports (aspect-ratio: 216 / 300) {
+        #dex figure .frame {
+          height: auto;
+          padding-top: 0;
+          aspect-ratio: 216 / 300;
+        }
+      }
+      #dex figure img,
+      #dex figure .frame > div {
+        position: absolute;
+        top: 0;
+        left: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #dex figure.got {
+        cursor: pointer;
+      }
+      #dex figure img {
+        filter: drop-shadow(0 6px 8px rgba(40, 30, 20, 0.18));
+      }
+      #dex figure .frame > div {
+        display: grid;
+        place-items: center;
+        box-sizing: border-box;
+        transform: scale(0.8);
+        border: 1.5px dashed rgba(40, 30, 20, 0.2);
+        border-radius: 10px;
+        color: rgba(40, 30, 20, 0.25);
+        font-size: 30px;
+        font-weight: 700;
+      }
+      #dex figcaption b {
+        display: block;
+        font-size: 13px;
+      }
+      #dex figcaption span {
+        color: var(--soft);
+        font-size: 11px;
+      }
+      #dex .miss b {
+        color: var(--soft);
+        font-weight: 500;
+      }
+      #dex .ultra span {
+        color: #c98a12;
+      }
+      #dex .rare span {
+        color: #5b55d6;
+      }
+      /* A card opened from the dex: the canvas rises above the dex panel, over a scrim
+         that dims the dex without hiding it. */
+      #scrim {
+        position: fixed;
+        z-index: 6;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(237, 236, 230, 0.82);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+      }
+      body[data-showcase='on'] #scrim {
+        opacity: 1;
+      }
+      body[data-showcase] #stage {
+        z-index: 7;
+      }
+      body[data-showcase='on'] #inspect-bar {
+        z-index: 8;
+        opacity: 1;
+        transform: translate(-50%, 0);
+        pointer-events: auto;
+      }
+
+      /* White glare at the moment the pack bursts. */
+      #flash {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        opacity: 0;
+        background: radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 65%);
+      }
+      #flash.go {
+        animation: flash 0.5s ease-out;
+      }
+      @keyframes flash {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 0;
+        }
+      }
+
+      /* Phones: the series tabs move left so they clear the dex button. Each env() line
+         follows a plain fallback for kernels that do not know env(). */
+      @media (max-width: 600px) {
+        #series {
+          top: 14px;
+          top: calc(14px + env(safe-area-inset-top));
+          left: 14px;
+          transform: none;
+        }
+        #series button {
+          padding: 6px 13px;
+        }
+        #dex-open {
+          top: 13px;
+          top: calc(13px + env(safe-area-inset-top));
+          right: 14px;
+          padding: 7px 13px;
+        }
+        #toast {
+          top: 60px;
+          top: calc(60px + env(safe-area-inset-top));
+        }
+        .dock {
+          bottom: 5vh;
+          bottom: calc(5vh + env(safe-area-inset-bottom));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="flash"></div>
+    <div id="scrim"></div>
+    <div id="series"></div>
+    <button id="dex-open" class="pill">图鉴<span id="dex-count"></span></button>
+    <div id="toast"></div>
+
+    <div id="hint" class="dock">按住卡包，向右拖动撕开</div>
+    <div id="row-bar" class="dock"><button id="again" class="pill">再开一包</button></div>
+    <div id="inspect-bar" class="dock">
+      <button id="save" class="pill">保存图片</button>
+      <button id="back" class="pill">返回</button>
+    </div>
+
+    <div id="dex" hidden>
+      <header>
+        <h2>图鉴</h2>
+        <button id="dex-clear">清空</button>
+        <button id="dex-close" class="pill">关闭</button>
+      </header>
+      <div id="dex-body"></div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
